@@ -1,0 +1,26 @@
+v2_sync_funcs_h: wrote 4718 declarations to D:\l4t\DKC3Recomp\recomp\funcs.h
+v2_emit: 4725 roots, 3055 exact AOT variants, 1702 LLE variants
+v2_emit: 15 bank(s) emitted, 0 reused in 80.65s
+v2_emit: atomically published D:\l4t\DKC3Recomp\generated\snesrecomp
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb2_part00_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb6_part718_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part0b_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part102_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part68e_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part698_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part85_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_part9e_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_parta0_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_parta4_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partb5_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partbd_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partcd_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partd1_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partdf_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_parte5_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partf6_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankb7_partfb_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankbb_part264_v2.c
+Applied DKC3 widescreen overrides: D:\l4t\DKC3Recomp\generated\snesrecomp\bankbb_part2ad_v2.c
+Generated private sources in D:\l4t\DKC3Recomp\generated\snesrecomp
+The ROM and generated game code remain ignored by Git.

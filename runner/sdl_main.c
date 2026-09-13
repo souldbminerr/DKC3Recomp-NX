@@ -33,6 +33,14 @@
 #include "launcher.h"
 #include "snes/snes.h"
 
+#ifdef __SWITCH__
+/* Switch platform bring-up + SD ROM resolver (framework) and the raw
+ * joystick gamepad path (this directory). recomp-ui, the overlay, and
+ * the desktop GL presenter are compiled out of Switch builds. */
+#include "switch_gamepad.h"
+#include "switch_impl.h"
+#endif
+
 #include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -231,10 +239,14 @@ static bool EnsureSaveDirectory(void) {
 
 static void ShowError(const char *message) {
   fprintf(stderr, "%s\n", message ? message : "Unknown error");
+#ifndef __SWITCH__
+  /* Switch SDL2 has no message-box backend; stderr (nxlink / debug.log
+   * file logging) carries the report instead. */
   if (SDL_WasInit(SDL_INIT_VIDEO))
     (void)SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
                                    "Unable to start DKC3",
                                    message ? message : "Unknown error", NULL);
+#endif
 }
 
 static bool WriteFramePpm(const char *path, const uint8_t *pixels) {
@@ -355,9 +367,41 @@ static void CloseControllers(SdlHost *host) {
     }
     host->controllers[i] = NULL;
   }
+#ifdef __SWITCH__
+  Dkc3SwitchClosePads();
+#endif
 }
 
 static void RefreshControllers(SdlHost *host) {
+#ifdef __SWITCH__
+  /* Input stays on the raw joystick path (no mapping database), but rumble
+   * goes through GameController handles opened on the same pads: SDL shares
+   * the underlying hid handle, and ControllerForPlayer hands these to the
+   * haptic worker. SDL_IsGameController is mapping-based, so open by raw
+   * index instead. */
+  CloseControllers(host);
+  Dkc3SwitchRefreshPads();
+  int opened = 0;
+  for (int device = 0;
+       device < SDL_NumJoysticks() && opened < kMaximumControllers;
+       device++) {
+    SDL_GameController *controller = SDL_GameControllerOpen(device);
+    if (controller) host->controllers[opened++] = controller;
+  }
+  if (opened > 0) {
+    const char *name = SDL_GameControllerName(host->controllers[0]);
+    const bool rumble_supported =
+        SDL_GameControllerHasRumble(host->controllers[0]) == SDL_TRUE;
+    Dkc3DesktopOverlaySetHapticsDevice(
+        host->overlay, name, rumble_supported);
+    fprintf(stdout, "Controller: %s; rumble %s.\n",
+            name && name[0] ? name : "(unnamed)",
+            rumble_supported ? "available" : "unavailable");
+  } else {
+    Dkc3DesktopOverlaySetHapticsDevice(host->overlay, NULL, false);
+    fprintf(stdout, "Controller: none detected.\n");
+  }
+#else
   CloseControllers(host);
   int opened = 0;
   for (int device = 0;
@@ -384,6 +428,7 @@ static void RefreshControllers(SdlHost *host) {
     Dkc3DesktopOverlaySetHapticsDevice(host->overlay, NULL, false);
     fprintf(stdout, "Controller: none detected.\n");
   }
+#endif
 }
 
 static void PumpEvents(SdlHost *host) {
@@ -411,9 +456,15 @@ static void PumpEvents(SdlHost *host) {
     if (event.type == SDL_CONTROLLERDEVICEADDED ||
         event.type == SDL_CONTROLLERDEVICEREMOVED)
       RefreshControllers(host);
+#ifdef __SWITCH__
+    if (event.type == SDL_JOYDEVICEADDED ||
+        event.type == SDL_JOYDEVICEREMOVED)
+      RefreshControllers(host);
+#endif
   }
 }
 
+#ifndef __SWITCH__
 static uint32_t ReadGamepadButtons(SDL_GameController *controller) {
   uint32_t buttons = 0;
 #define MAP_SDL_BUTTON(sdl_button, dkc3_button)                            \
@@ -448,6 +499,7 @@ static uint8_t ReadTrigger(SDL_GameController *controller,
   if (value <= 0) return 0;
   return (uint8_t)(((uint32_t)(uint16_t)value * 255u) / 32767u);
 }
+#endif /* !__SWITCH__ (ReadGamepadButtons/ReadTrigger) */
 
 static bool IsSdlScancodePressed(int scancode, void *context) {
   const Uint8 *keys = (const Uint8 *)context;
@@ -457,9 +509,14 @@ static bool IsSdlScancodePressed(int scancode, void *context) {
 
 static SdlControls ReadControls(SdlHost *host) {
   SdlControls controls = {0, 0};
+#ifdef __SWITCH__
+  /* The Switch window never loses input focus meaningfully; SDL may also
+   * report no focus flags in applet mode, which must not mute controls. */
+#else
   SDL_Window *window = (SDL_Window *)host->presenter.window;
   if (!host->hidden && !(SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS))
     return controls;
+#endif
   const Uint8 *keys = SDL_GetKeyboardState(NULL);
   uint32_t keyboard[kDkc3DesktopPlayerCount];
   for (int player = 0; player < kDkc3DesktopPlayerCount; player++)
@@ -468,6 +525,12 @@ static SdlControls ReadControls(SdlHost *host) {
 
   Dkc3GamepadState gamepads[kMaximumControllers];
   size_t gamepad_count = 0;
+#ifdef __SWITCH__
+  /* Player 1 autodetects the first attached pad (player_src forced to
+   * gamepad in main); sticks + ZL/ZR triggers are decoded in
+   * switch_gamepad.c. */
+  gamepad_count = Dkc3SwitchReadPads(gamepads, kMaximumControllers);
+#else
   for (int i = 0; i < kMaximumControllers; i++) {
     SDL_GameController *controller = host->controllers[i];
     if (!controller || !SDL_GameControllerGetAttached(controller)) continue;
@@ -489,6 +552,7 @@ static SdlControls ReadControls(SdlHost *host) {
     gamepad->right_trigger = ReadTrigger(
         controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
   }
+#endif
   controls.controller = Dkc3RoutePlayerInputsWithBindings(
       keyboard, gamepads, gamepad_count, host->player_source,
       host->player_deadzone, host->player_pad_bind);
@@ -519,10 +583,10 @@ static bool InitializeAudio(SdlHost *host) {
   desired.freq = kAudioRate;
   desired.format = AUDIO_S16SYS;
   desired.channels = kAudioChannels;
-  /* 1024 frames is 32 ms at the cartridge's rate: a pull the queue can
-   * always cover with two frames of margin, at half the latency of the
-   * earlier 2048. */
-  desired.samples = 1024;
+  /* 2048 frames is 64 ms at the cartridge's rate: a bigger pull plus the
+   * wider target below bridges loading-screen hitches (slow emulation
+   * frames that queue nothing) at the cost of ~100 ms base latency. */
+  desired.samples = 2048;
   host->audio_device = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained, 0);
   if (!host->audio_device) return false;
   if (obtained.freq != desired.freq || obtained.format != desired.format ||
@@ -547,11 +611,17 @@ static double AudioQueuedFrames(const SdlHost *host) {
 }
 
 /* The queue fill rate control aims for: half a device pull, so the queue
- * can always cover the next pull, plus two frames of margin against host
- * stalls. The average fill sits here; the low point before a pull is the
- * two frames. */
+ * can always cover the next pull, plus a margin against host stalls
+ * (loading screens). Four frames on desktop; ten on Switch, where measured
+ * transition frames take up to ~125 ms in the LLE interpreter and would
+ * otherwise drain the queue into an underrun buzz. The average fill sits
+ * here; the low point before a pull is the margin. */
 static double AudioTargetFrames(const SdlHost *host) {
-  return (double)host->audio_device_frames / 2.0 + 2.0 * kMaximumFrameAudio;
+#ifdef __SWITCH__
+  return (double)host->audio_device_frames / 2.0 + 10.0 * kMaximumFrameAudio;
+#else
+  return (double)host->audio_device_frames / 2.0 + 4.0 * kMaximumFrameAudio;
+#endif
 }
 
 static bool QueueAudio(SdlHost *host, const int16_t *samples, int frames,
@@ -1035,6 +1105,19 @@ static int RunGame(const char *rom_path,
     if (EnsureSaveDirectory()) RtlReadSram();
     else sram_enabled = false;
   }
+#ifdef __SWITCH__
+  /* Seed an empty save when none exists: proves the path is writable
+   * while the log is watching. */
+  if (sram_enabled) {
+    char sram_path[128];
+    RtlSramFilePath(sram_path, sizeof sram_path);
+    FILE *probe = fopen(sram_path, "rb");
+    if (probe)
+      fclose(probe);
+    else
+      RtlWriteSram();
+  }
+#endif
   if (!Dkc3DesktopColorFilterInit(&host.color_filter, screen_filter)) {
     free(rom);
 #ifdef __APPLE__
@@ -1043,7 +1126,14 @@ static int RunGame(const char *rom_path,
     ShowError("Unable to initialize the selected screen-color filter");
     return 4;
   }
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER |
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO |
+#ifdef __SWITCH__
+               /* Raw SDL_Joystick path; the GameController mapping database
+                * is not needed (or trusted) in applet mode. */
+               SDL_INIT_JOYSTICK |
+#else
+               SDL_INIT_GAMECONTROLLER |
+#endif
                SDL_INIT_TIMER) != 0) {
     free(rom);
     Dkc3DesktopColorFilterDestroy(&host.color_filter);
@@ -1253,6 +1343,14 @@ static int RunGame(const char *rom_path,
   Dkc3RewindHistory rewind_history;
   memset(&rewind_history, 0, sizeof rewind_history);
   size_t rewind_snapshot_size = RtlSaveSnapshotToMemory(NULL, 0);
+#ifdef __SWITCH__
+  /* Rewind is unreachable on Switch (no assist input binds it) while its
+   * snapshots -- a full state serialize plus history push every 3rd frame
+   * -- cost real CPU and RAM on every session. Disable capture entirely;
+   * the rewind branch below then never has anything to pop. */
+  uint8_t *rewind_scratch = NULL;
+  bool rewind_available = false;
+#else
   uint8_t *rewind_scratch = rewind_snapshot_size
       ? (uint8_t *)malloc(rewind_snapshot_size) : NULL;
   bool rewind_available =
@@ -1262,6 +1360,7 @@ static int RunGame(const char *rom_path,
       RtlSaveSnapshotToMemory(rewind_scratch, rewind_snapshot_size) ==
           rewind_snapshot_size &&
       Dkc3RewindHistoryPush(&rewind_history, rewind_scratch);
+#endif
   bool test_rewind_completed = false;
   bool test_fast_forward_completed = false;
   bool test_overlay_completed = false;
@@ -1290,6 +1389,11 @@ static int RunGame(const char *rom_path,
   }
 
   while (host.running) {
+#ifdef __SWITCH__
+    /* Home-button / suspend pump; libnx kills titles that starve
+     * appletMainLoop. An applet exit request also arrives as SDL_QUIT. */
+    if (!SwitchImpl_Tick()) break;
+#endif
 #ifdef __APPLE__
     const double stage_top = Dkc3MacHostSeconds();
 #endif
@@ -1395,6 +1499,29 @@ static int RunGame(const char *rom_path,
 #endif
     controls.host_actions = Dkc3ApplyAssistGate(
         controls.host_actions, platform_host_actions, assist_tools);
+#ifdef SWITCH_DEBUG
+    /* Debug-only (make DEBUG=1): L3 = quick-save, R3 = quick-load.
+     * Applied after the assist gate, which strips state actions while
+     * assist tools are off. Edge-triggered so a held click fires once. */
+    {
+      Dkc3GamepadState dbg_pad;
+      if (Dkc3SwitchReadPads(&dbg_pad, 1) > 0) {
+        static uint32_t s_prev_stick_click;
+        uint32_t cur = dbg_pad.buttons &
+            (kDkc3GamepadLeftStick | kDkc3GamepadRightStick);
+        uint32_t pressed = cur & ~s_prev_stick_click;
+        s_prev_stick_click = cur;
+        if (pressed & kDkc3GamepadLeftStick) {
+          controls.host_actions |= kDkc3HostSaveState;
+          fprintf(stderr, "[SwitchDbg] quick-save\n");
+        }
+        if (pressed & kDkc3GamepadRightStick) {
+          controls.host_actions |= kDkc3HostLoadState;
+          fprintf(stderr, "[SwitchDbg] quick-load\n");
+        }
+      }
+    }
+#endif
     uint32_t state_actions = controls.host_actions &
         (kDkc3HostSaveState | kDkc3HostLoadState);
     uint32_t pressed_state_actions = state_actions & ~previous_state_actions;
@@ -1482,6 +1609,9 @@ static int RunGame(const char *rom_path,
 
     bool frame_ready = overlay_open;
     double audio_ratio = 1.0;
+#ifdef __SWITCH__
+    static uint64_t sw_e0 = 0, sw_e1 = 0, sw_p0 = 0, sw_p1 = 0;
+#endif
 #ifdef __APPLE__
     double emulate_seconds = 0.0;
 #endif
@@ -1519,7 +1649,13 @@ static int RunGame(const char *rom_path,
         const uint64_t emulate_start = SDL_GetPerformanceCounter();
 #endif
         Dkc3EnemyDefeatProbeCapture(&host.enemy_defeat_probe, g_ram);
+#ifdef __SWITCH__
+        sw_e0 = SDL_GetPerformanceCounter();
+#endif
         (void)RtlRunFrame(controls.controller);
+#ifdef __SWITCH__
+        sw_e1 = SDL_GetPerformanceCounter();
+#endif
         if (g_fail || !Dkc3LastLleResult()) {
           fprintf(stderr, "Runtime stopped at frame %llu (resume PC $%06x).\n",
                   host_frame + 1, (unsigned)Dkc3ResumePc());
@@ -1544,6 +1680,12 @@ static int RunGame(const char *rom_path,
         }
         Dkc3DrawPpuFrame();
         frame_ready = true;
+#ifdef __SWITCH__
+        /* Persist SRAM every ~30 s so progress survives unclean exits;
+         * the framework exit/focus hooks cover clean quits. */
+        if (host_frame != 0 && (host_frame % 1800) == 0)
+          RtlWriteSram();
+#endif
 #ifdef __APPLE__
         emulate_seconds += (double)(SDL_GetPerformanceCounter() - emulate_start) /
                            (double)frequency;
@@ -1569,6 +1711,50 @@ static int RunGame(const char *rom_path,
             fprintf(stderr, "warning: SDL audio queue stopped\n");
             host.audio_available = false;
           }
+#ifdef __SWITCH__
+          /* TEMP audio-stall profiler (remove after diagnosis): 1 Hz log of
+           * real time per emulated frame, queue low-water mark, and stretch
+           * ratio range. */
+          {
+            static uint64_t aprof_prev = 0;
+            static uint64_t aprof_maxdt = 0;
+            static uint64_t aprof_maxe = 0, aprof_maxp = 0;
+            static double aprof_minq = 1e30;
+            static double aprof_loratio = 2.0, aprof_hiratio = 0.0;
+            static unsigned aprof_n = 0;
+            uint64_t anow = SDL_GetPerformanceCounter();
+            if (aprof_prev != 0) {
+              uint64_t adt = anow - aprof_prev;
+              if (adt > aprof_maxdt) aprof_maxdt = adt;
+              if (sw_e1 > sw_e0 && sw_e1 - sw_e0 > aprof_maxe)
+                aprof_maxe = sw_e1 - sw_e0;
+              if (sw_p1 > sw_p0 && sw_p1 - sw_p0 > aprof_maxp)
+                aprof_maxp = sw_p1 - sw_p0;
+              double aq = AudioQueuedFrames(&host);
+              if (aq < aprof_minq) aprof_minq = aq;
+              if (audio_ratio < aprof_loratio) aprof_loratio = audio_ratio;
+              if (audio_ratio > aprof_hiratio) aprof_hiratio = audio_ratio;
+              if (++aprof_n >= 60) {
+                fprintf(stderr,
+                        "[aprof] f%llu dtmax=%.1fms emax=%.1fms pmax=%.1fms "
+                        "qmin=%.0f ratio=[%.4f,%.4f]\n",
+                        host_frame,
+                        (double)aprof_maxdt * 1000.0 / (double)frequency,
+                        (double)aprof_maxe * 1000.0 / (double)frequency,
+                        (double)aprof_maxp * 1000.0 / (double)frequency,
+                        aprof_minq, aprof_loratio, aprof_hiratio);
+                aprof_n = 0;
+                aprof_maxdt = 0;
+                aprof_maxe = 0;
+                aprof_maxp = 0;
+                aprof_minq = 1e30;
+                aprof_loratio = 2.0;
+                aprof_hiratio = 0.0;
+              }
+            }
+            aprof_prev = anow;
+          }
+#endif
         }
         if (test_frame_limit && host_frame >= test_frame_limit) {
           host.running = false;
@@ -1672,6 +1858,9 @@ static int RunGame(const char *rom_path,
          * OpenGL path until it closes. */
         if (metal_presenter) Dkc3MacMetalPresenterSetVisible(false);
 #endif
+#ifdef __SWITCH__
+        sw_p0 = SDL_GetPerformanceCounter();
+#endif
         if (!Dkc3SdlPresenterPresent(&host.presenter, present_pixels,
                                      Dkc3VideoWidth(), kFrameHeight,
                                      Dkc3DesktopOverlayRenderOpenGl,
@@ -1682,6 +1871,9 @@ static int RunGame(const char *rom_path,
           runtime_failure = true;
           break;
         }
+#ifdef __SWITCH__
+        sw_p1 = SDL_GetPerformanceCounter();
+#endif
       }
 #ifdef __APPLE__
       if (pacing_log) {
@@ -1820,6 +2012,11 @@ static int RunGame(const char *rom_path,
 
 int main(int argc, char **argv) {
   SDL_SetMainReady();
+#ifdef __SWITCH__
+  /* Seamless handheld boot: SD app dir becomes cwd, ROM comes straight
+   * from sdmc:/switch/dkc3/rom.smc, no launcher, P1+P2 on pads. */
+  SwitchImpl_Init();
+#endif
   bool force_launcher = false;
   int rom_argument = 1;
   if (argc >= 2 && strcmp(argv[1], "--launcher") == 0) {
@@ -1854,6 +2051,58 @@ int main(int argc, char **argv) {
   RecompLauncherCSettings settings;
   Dkc3LauncherSettingsDefault(&settings);
   Dkc3LauncherSettingsLoad(&settings);
+#ifdef __SWITCH__
+  {
+    (void)rom_path;
+    (void)force_launcher;
+    /* Forced handheld profile (re-applied every boot, ahead of any
+     * launcher.cfg): players 1 and 2 autodetect pads in order, 16:9
+     * widescreen on, and the pad layout is the fixed Switch mapping --
+     * ABXY straight through, ZL/ZR as L/R triggers, Plus as Start,
+     * Minus as Select. Assist pad/key shortcuts are cleared so ZL/ZR
+     * never double as rewind/fast-forward; haptics stays on (stomp pulses
+     * via rumble-only GameController handles; earlier Switch builds saved
+     * HapticsEnabled=0 to launcher.cfg, so force it back on). */
+    static const int kSwitchPadBind[12] = {
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_UP),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_DOWN),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_LEFT),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_DPAD_RIGHT),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_A),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_B),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_X),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_Y),
+        RECOMP_LAUNCHER_PAD_AXIS(SDL_CONTROLLER_AXIS_TRIGGERLEFT, 1),
+        RECOMP_LAUNCHER_PAD_AXIS(SDL_CONTROLLER_AXIS_TRIGGERRIGHT, 1),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_START),
+        RECOMP_LAUNCHER_PAD_BUTTON(SDL_CONTROLLER_BUTTON_BACK),
+    };
+    settings.player_src[0] = 2;
+    settings.player_src[1] = 2;
+    settings.skip_launcher = 1;
+    /* 16:9 widescreen out of the box on the handheld/big screen. */
+    settings.aspect_index = kDkc3VideoAspect16x9;
+    settings.widescreen = 1;
+    for (int player = 0; player < kDkc3DesktopPlayerCount; player++)
+      memcpy(settings.player_pad_bind[player], kSwitchPadBind,
+             sizeof kSwitchPadBind);
+    memset(settings.assist_pad_bind, 0, sizeof settings.assist_pad_bind);
+    memset(settings.assist_key_bind, 0, sizeof settings.assist_key_bind);
+    Dkc3LauncherSetHaptics(1);
+    char switch_rom[kPathCapacity] = {0};
+    const char *positional =
+        (argc == rom_argument + 1) ? argv[rom_argument] : NULL;
+    if (!SwitchImpl_ResolveRom(switch_rom, sizeof switch_rom, positional)) {
+      ShowError("No ROM found. Copy rom.smc to sdmc:/switch/dkc3/.");
+      ThrowMissingROM();
+      return 2;
+    }
+    int switch_result = RunGame(switch_rom, &settings);
+    (void)Dkc3LauncherSettingsSave(&settings);
+    SwitchImpl_Exit();
+    return switch_result;
+  }
+#else
   if (!rom_path[0])
     (void)Dkc3LauncherReadRomCache(rom_path, sizeof rom_path);
   bool suppress_launcher = EnvironmentEnabled("SNESRECOMP_NO_LAUNCHER") ||
@@ -1883,4 +2132,5 @@ int main(int argc, char **argv) {
   int result = RunGame(rom_path, &settings);
   (void)Dkc3LauncherSettingsSave(&settings);
   return result;
+#endif /* __SWITCH__: handheld profile above returns via SwitchImpl_Exit */
 }

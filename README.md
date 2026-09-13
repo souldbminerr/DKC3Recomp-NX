@@ -1,3 +1,8 @@
+# AI Usage Disclosure from Soul
+Yes, I used AI.
+No, I don't care about your opinion
+This was to simply port a game I love to Switch without spending a week.
+
 # DKC3Recomp
 
 A native recompilation of *Donkey Kong Country 3: Dixie Kong's Double

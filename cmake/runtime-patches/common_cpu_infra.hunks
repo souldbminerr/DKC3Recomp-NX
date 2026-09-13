@@ -1,44 +1,8 @@
 # Per-call instrumentation on the generated-function entry/exit hooks.
 file: runner/src/common_cpu_infra.c
 
-# Every generated function entry compared its name against the write-log
-# scope prefix, but a scope can only open when SNESRECOMP_WLOG names an
-# output file (wlog_scope_enter returns before doing anything otherwise).
-# Resolve that once and skip the compare when no log is armed. Ported from
-# DKC1Recomp's snesrecomp b46b940.
-@@ wlog-prefix-latch
-<<<<
-static int wlog_func_matches(const char *name) {
-  static const char *prefix;
-  static size_t prefix_len;
-  static int initialized;
-  if (!initialized) {
-    prefix = getenv("SNESRECOMP_WLOG_FUNC_PREFIX");
-    if (!prefix || !*prefix) prefix = "vram_payload_handler_M";
-    prefix_len = strlen(prefix);
-    initialized = 1;
-  }
-  return name && strncmp(name, prefix, prefix_len) == 0;
-}
-====
-static FORCEINLINE int wlog_func_matches(const char *name) {
-  static const char *prefix;
-  static size_t prefix_len;
-  static int enabled;
-  static int initialized;
-  if (!initialized) {
-    const char *output = getenv("SNESRECOMP_WLOG");
-    enabled = output && *output;
-    if (enabled) {
-      prefix = getenv("SNESRECOMP_WLOG_FUNC_PREFIX");
-      if (!prefix || !*prefix) prefix = "vram_payload_handler_M";
-      prefix_len = strlen(prefix);
-    }
-    initialized = 1;
-  }
-  return enabled && name && strncmp(name, prefix, prefix_len) == 0;
-}
->>>>
+# wlog-prefix-latch retired: the enabled latch now lives directly in the
+# pinned tree (same shape as the hunk below), so there is nothing to adapt.
 
 # The stack-balance auditor probed an open-addressed hash table on every
 # generated function return purely to accumulate a diagnostic report. It is
@@ -57,7 +21,9 @@ static FORCEINLINE int wlog_func_matches(const char *name) {
       e->calls++;
       if (delta) { e->total_delta += delta; e->nonzero++; e->last_delta = delta; }
     }
+#if SNESRECOMP_TRACE
     boundary_audit_record_exit(g_recomp_stack[g_recomp_stack_top - 1]);
+#endif
 ====
   if (g_recomp_stack_top > 0) {
     static int s_stackbal_audit = -1;
@@ -74,7 +40,9 @@ static FORCEINLINE int wlog_func_matches(const char *name) {
         if (delta) { e->total_delta += delta; e->nonzero++; e->last_delta = delta; }
       }
     }
+#if SNESRECOMP_TRACE
     boundary_audit_record_exit(g_recomp_stack[g_recomp_stack_top - 1]);
+#endif
 >>>>
 
 @@ stackbal-report-hint

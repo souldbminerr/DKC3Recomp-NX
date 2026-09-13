@@ -57,3 +57,10 @@ tier2_*.jsonl
 
 # Derived symbol files written by tools/ingest_dkc3_disasm.py
 recomp/.ingest/
+*.nro
+*.nacp
+*.elf
+*.lst
+# Switch build: adapted runtime copies (Makefile.switch regenerates these
+# from cmake/runtime-patches via scripts/apply_dkc3_runtime_patches.py).
+patched-runtime/
