@@ -1609,9 +1609,6 @@ static int RunGame(const char *rom_path,
 
     bool frame_ready = overlay_open;
     double audio_ratio = 1.0;
-#ifdef __SWITCH__
-    static uint64_t sw_e0 = 0, sw_e1 = 0, sw_p0 = 0, sw_p1 = 0;
-#endif
 #ifdef __APPLE__
     double emulate_seconds = 0.0;
 #endif
@@ -1649,13 +1646,7 @@ static int RunGame(const char *rom_path,
         const uint64_t emulate_start = SDL_GetPerformanceCounter();
 #endif
         Dkc3EnemyDefeatProbeCapture(&host.enemy_defeat_probe, g_ram);
-#ifdef __SWITCH__
-        sw_e0 = SDL_GetPerformanceCounter();
-#endif
         (void)RtlRunFrame(controls.controller);
-#ifdef __SWITCH__
-        sw_e1 = SDL_GetPerformanceCounter();
-#endif
         if (g_fail || !Dkc3LastLleResult()) {
           fprintf(stderr, "Runtime stopped at frame %llu (resume PC $%06x).\n",
                   host_frame + 1, (unsigned)Dkc3ResumePc());
@@ -1711,50 +1702,6 @@ static int RunGame(const char *rom_path,
             fprintf(stderr, "warning: SDL audio queue stopped\n");
             host.audio_available = false;
           }
-#ifdef __SWITCH__
-          /* TEMP audio-stall profiler (remove after diagnosis): 1 Hz log of
-           * real time per emulated frame, queue low-water mark, and stretch
-           * ratio range. */
-          {
-            static uint64_t aprof_prev = 0;
-            static uint64_t aprof_maxdt = 0;
-            static uint64_t aprof_maxe = 0, aprof_maxp = 0;
-            static double aprof_minq = 1e30;
-            static double aprof_loratio = 2.0, aprof_hiratio = 0.0;
-            static unsigned aprof_n = 0;
-            uint64_t anow = SDL_GetPerformanceCounter();
-            if (aprof_prev != 0) {
-              uint64_t adt = anow - aprof_prev;
-              if (adt > aprof_maxdt) aprof_maxdt = adt;
-              if (sw_e1 > sw_e0 && sw_e1 - sw_e0 > aprof_maxe)
-                aprof_maxe = sw_e1 - sw_e0;
-              if (sw_p1 > sw_p0 && sw_p1 - sw_p0 > aprof_maxp)
-                aprof_maxp = sw_p1 - sw_p0;
-              double aq = AudioQueuedFrames(&host);
-              if (aq < aprof_minq) aprof_minq = aq;
-              if (audio_ratio < aprof_loratio) aprof_loratio = audio_ratio;
-              if (audio_ratio > aprof_hiratio) aprof_hiratio = audio_ratio;
-              if (++aprof_n >= 60) {
-                fprintf(stderr,
-                        "[aprof] f%llu dtmax=%.1fms emax=%.1fms pmax=%.1fms "
-                        "qmin=%.0f ratio=[%.4f,%.4f]\n",
-                        host_frame,
-                        (double)aprof_maxdt * 1000.0 / (double)frequency,
-                        (double)aprof_maxe * 1000.0 / (double)frequency,
-                        (double)aprof_maxp * 1000.0 / (double)frequency,
-                        aprof_minq, aprof_loratio, aprof_hiratio);
-                aprof_n = 0;
-                aprof_maxdt = 0;
-                aprof_maxe = 0;
-                aprof_maxp = 0;
-                aprof_minq = 1e30;
-                aprof_loratio = 2.0;
-                aprof_hiratio = 0.0;
-              }
-            }
-            aprof_prev = anow;
-          }
-#endif
         }
         if (test_frame_limit && host_frame >= test_frame_limit) {
           host.running = false;
@@ -1858,9 +1805,6 @@ static int RunGame(const char *rom_path,
          * OpenGL path until it closes. */
         if (metal_presenter) Dkc3MacMetalPresenterSetVisible(false);
 #endif
-#ifdef __SWITCH__
-        sw_p0 = SDL_GetPerformanceCounter();
-#endif
         if (!Dkc3SdlPresenterPresent(&host.presenter, present_pixels,
                                      Dkc3VideoWidth(), kFrameHeight,
                                      Dkc3DesktopOverlayRenderOpenGl,
@@ -1871,9 +1815,6 @@ static int RunGame(const char *rom_path,
           runtime_failure = true;
           break;
         }
-#ifdef __SWITCH__
-        sw_p1 = SDL_GetPerformanceCounter();
-#endif
       }
 #ifdef __APPLE__
       if (pacing_log) {
