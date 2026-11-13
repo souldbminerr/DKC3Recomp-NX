@@ -64,3 +64,9 @@ recomp/.ingest/
 # Switch build: adapted runtime copies (Makefile.switch regenerates these
 # from cmake/runtime-patches via scripts/apply_dkc3_runtime_patches.py).
 patched-runtime/
+
+*.elf
+*.nacp
+*.nro
+*.lst
+*.map

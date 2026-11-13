@@ -26,7 +26,7 @@ endif
 
 TOPDIR ?= $(CURDIR)
 export TOPDIR
-include $(DEVKITPRO)/libnx/switch_rules
+include $(DEVKITPRO)/libounce/switch2_rules
 
 TARGET		:=	dkc3
 BUILD		:=	build-switch
@@ -160,17 +160,26 @@ endif
 INCLUDE		:=	$(foreach dir,$(GAME_INCLUDES_EARLY),-I$(dir)) \
 			$(foreach dir,$(SNESRECOMP_SWITCH_INCLUDES),-I$(dir)) \
 			$(foreach dir,$(GAME_INCLUDES_LATE),-I$(dir)) \
+			-I$(LIBNX)/include \
 			-I$(TOPDIR)/$(BUILD)
 
 DEFINES		:=	$(SNESRECOMP_SWITCH_DEFS) $(GAME_DEFS)
 
+# Prefer libounce/Switch 2 portlibs (SDL2/EGL) when present.
+SWITCH2_PORTLIBS	:=	$(DEVKITPRO)/portlibs/switch2
+ifneq ($(wildcard $(SWITCH2_PORTLIBS)/bin/sdl2-config),)
+SDL2_CONFIG		:=	$(SWITCH2_PORTLIBS)/bin/sdl2-config
+else
+SDL2_CONFIG		:=	sdl2-config
+endif
+
 CFLAGS		:=	-g -Wall -O2 -ffunction-sections -flto=auto \
-			$(ARCH) $(DEFINES) $(INCLUDE) `sdl2-config --cflags`
+			$(ARCH) $(DEFINES) $(INCLUDE) `$(SDL2_CONFIG) --cflags`
 
 CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions
 
 ASFLAGS		:=	-g $(ARCH)
-LDFLAGS		=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -flto=auto \
+LDFLAGS		=	-specs=$(DEVKITPRO)/libounce/switch.specs -g $(ARCH) -flto=auto \
 			-Wl,-Map,$(notdir $*.map)
 
 # GC sections so the never-called desktop launcher entry point
@@ -180,9 +189,13 @@ LDFLAGS		+=	-Wl,--gc-sections
 # Neutralize SDL2's Switch keyboard pump (no text input in these titles).
 LDFLAGS		+=	$(SNESRECOMP_SWITCH_WRAP)
 
-LIBS		:=	`sdl2-config --libs` -lm
-
+ifneq ($(wildcard $(SWITCH2_PORTLIBS)/lib),)
+LIBDIRS		:=	$(SWITCH2_PORTLIBS) $(PORTLIBS) $(LIBNX)
+else
 LIBDIRS		:=	$(PORTLIBS) $(LIBNX)
+endif
+
+LIBS		:=	`$(SDL2_CONFIG) --libs` -lm -lnx -lEGL
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -204,7 +217,7 @@ export INCLUDE	:=	$(INCLUDE)
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
 ifeq ($(wildcard $(APP_ICON)),)
-export NROFLAGS += --icon=$(DEVKITPRO)/libnx/default_icon.jpg
+export NROFLAGS += --icon=$(DEVKITPRO)/libounce/default_icon.jpg
 else
 export NROFLAGS += --icon=$(APP_ICON)
 endif
@@ -220,7 +233,7 @@ all: $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(TOPDIR)/Makefile.switch
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(TOPDIR)/Makefile
 
 clean:
 	@echo clean ...
