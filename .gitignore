@@ -34,7 +34,6 @@ __pycache__/
 
 *.ppm
 *.bmp
-*.png
 !assets/macos/DKC3RecompIcon.png
 *.wav
 *.pcm
