@@ -13,7 +13,9 @@ they are applied here, after adaptation, with the same exact-count policy:
 Usage: apply_switch_runtime_guards.py --patched <patched-runtime dir>
 Exits nonzero without writing anything unless every anchor matches exactly
 once, so a moved upstream runtime fails the build instead of silently
-dropping the guard.
+dropping the guard. Both cuts are idempotent: if the adapted copy already
+carries them (e.g. the pinned submodule fork guards them in-tree, or a
+previous run applied them), the script succeeds without duplicating them.
 """
 
 from __future__ import annotations
@@ -58,13 +60,24 @@ def main() -> int:
               flush=True)
         return 1
     guard = T2_GUARD.replace("\n", nl).encode()
-    data = data.replace(anchor, anchor + nl.encode() + guard, 1)
+    if anchor + nl.encode() + guard in data:
+        print("switch guards: tier2_record already guarded; leaving as-is",
+              flush=True)
+    else:
+        data = data.replace(anchor, anchor + nl.encode() + guard, 1)
 
-    if data.count(VERBOSE_OLD.encode()) != 1:
-        print("switch guards: tier2_verbose anchor not unique; "
-              "refusing to patch", flush=True)
+    old_count = data.count(VERBOSE_OLD.encode())
+    new_count = data.count(VERBOSE_NEW.encode())
+    if old_count == 1 and new_count == 0:
+        data = data.replace(VERBOSE_OLD.encode(), VERBOSE_NEW.encode(), 1)
+    elif old_count == 0 and new_count == 1:
+        print("switch guards: tier2_verbose already guarded; leaving as-is",
+              flush=True)
+    else:
+        print(f"switch guards: tier2_verbose anchors not unique "
+              f"(plain={old_count}, guarded={new_count}); refusing to patch",
+              flush=True)
         return 1
-    data = data.replace(VERBOSE_OLD.encode(), VERBOSE_NEW.encode(), 1)
 
     bridge.write_bytes(data)
     print(f"switch guards: tier2_record + tier2_verbose guarded in {bridge}",

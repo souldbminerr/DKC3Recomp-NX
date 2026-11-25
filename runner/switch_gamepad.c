@@ -13,9 +13,14 @@
 
 #include "switch_gamepad.h"
 
+#if SNESRECOMP_SDL3
+#include "desktop/sdl_compat.h"
+#else
 #include <SDL.h>
+#endif
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 enum {
@@ -69,6 +74,36 @@ int Dkc3SwitchRefreshPads(void) {
     }
     if (s_sticks[i]) opened++;
   }
+#if SNESRECOMP_SDL3
+  /* SDL3 enumerates instance IDs and opens sticks by ID; there is no
+   * device-index enumeration (SDL_NumJoysticks is gone). */
+  int count = 0;
+  SDL_JoystickID *ids = SDL_GetJoysticks(&count);
+  if (ids) {
+    for (int i = 0; i < count; i++) {
+      if (opened >= kSwitchPadCapacity) break;
+      if (FindStick(ids[i]) >= 0) continue;
+      SDL_Joystick *stick = SDL_OpenJoystick(ids[i]);
+      if (!stick) continue;
+      SDL_JoystickID opened_id = SDL_GetJoystickID(stick);
+      if (opened_id == 0 || FindStick(opened_id) >= 0) {
+        SDL_JoystickClose(stick);
+        continue;
+      }
+      int slot = FindFreeSlot();
+      if (slot < 0) {
+        SDL_JoystickClose(stick);
+        break;
+      }
+      s_sticks[slot] = stick;
+      s_stick_ids[slot] = opened_id;
+      opened++;
+      fprintf(stderr, "[SwitchPad] opened #%d: %s\n", slot,
+              SDL_JoystickName(stick) ? SDL_JoystickName(stick) : "(null)");
+    }
+    SDL_free(ids);
+  }
+#else
   int count = SDL_NumJoysticks();
   for (int device = 0; device < count; device++) {
     if (opened >= kSwitchPadCapacity) break;
@@ -94,12 +129,17 @@ int Dkc3SwitchRefreshPads(void) {
     fprintf(stderr, "[SwitchPad] opened #%d: %s\n", slot,
             SDL_JoystickName(stick) ? SDL_JoystickName(stick) : "(null)");
   }
+#endif
   if (opened == 0) {
     static bool s_warned;
     if (!s_warned) {
       s_warned = true;
+#if SNESRECOMP_SDL3
+      fprintf(stderr, "[SwitchPad] no joysticks\n");
+#else
       fprintf(stderr, "[SwitchPad] no joysticks (sdl=%d)\n",
               SDL_NumJoysticks());
+#endif
     }
   }
   return opened;

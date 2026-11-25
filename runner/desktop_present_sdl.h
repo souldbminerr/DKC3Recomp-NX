@@ -58,6 +58,13 @@ bool Dkc3SdlPresenterInit(Dkc3SdlPresenter *presenter, int window_scale,
                           int fullscreen, bool hidden, bool linear_filter,
                           int source_width, int source_height,
                           char *error, size_t error_capacity);
+/* Optional zero-copy framebuffer. On backends with directly CPU-mapped
+ * texture memory (Switch drako3d), acquires the next drawable and returns
+ * the pointer and row pitch to render into; NULL means unsupported (render
+ * into your own buffer as before). The pointer stays valid until that
+ * frame's Present. */
+bool Dkc3SdlPresenterBeginFrame(Dkc3SdlPresenter *presenter, bool direct,
+                                uint8_t **pixels, size_t *pitch);
 bool Dkc3SdlPresenterPresent(Dkc3SdlPresenter *presenter,
                              const uint8_t *pixels, int source_width,
                              int source_height,

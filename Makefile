@@ -1,19 +1,27 @@
-# Makefile.switch — Nintendo Switch (libnx) build for DKC2Recomp.
+# Makefile.switch — Nintendo Switch (libnx) build for DKC3Recomp.
 #
 # Copy-free: this file lives in the game repo and includes the framework
 # fragment at snesrecomp/runner/switch.mk. Requires devkitA64 + switch
 # portlibs SDL2. No CMake, no recomp-ui, no launcher: the NRO boots
-# straight from sdmc:/switch/dkc2/rom.smc.
+# straight from sdmc:/switch/dkc3/rom.smc.
 #
-#   1. Generate private sources once (needs the USA v1.0 ROM):
-#        python scripts/generate_snesrecomp.py --rom <path>/dkc2.smc
-#   2. make -f Makefile.switch            # -> dkc2.nro + dkc2.nacp
-#   3. Copy dkc2.nro to sdmc:/switch/dkc2/ and place rom.smc beside it.
+#   1. Generate private sources once (needs the En/Fr v1.0 ROM):
+#        python scripts/generate_snesrecomp.py --rom <path>/dkc3.smc
+#   2. make                          # -> dkc3.nro + dkc3.nacp (static, SDL2)
+#      make DKC3_SWITCH_DYNAMIC=1  # -> dynamically linked (libounce.so, shared libs)
+#      make DKC3_SWITCH_DYNAMIC=1 DKC3_SWITCH_SDL=3  # -> + shared SDL3
+#      make DEBUG=1 ...            # -> debug drako3d (-ldrako3dd) + L3/R3 extras
+#   3. Copy dkc3.nro to sdmc:/switch/dkc3/ and place rom.smc beside it.
+#      For DKC3_SWITCH_DYNAMIC=1 also copy the needed .so NROs
+#      ($(LIBNX)/lib/shared/nro, $(PORTLIBS_SWITCH2)/lib/shared/nro) next to
+#      it by hand; this Makefile bundles nothing. Needs a dynlink loader.
 #
-# Video is SDL2 + OpenGL ES2 (SDL_RENDERER_ACCELERATED); audio is the SDL2
-# queue over audren; input is raw SDL_Joystick (see runner/switch_gamepad.c
-# for the Switch button map). Desktop-only units (desktop_present_sdl.c,
-# desktop_overlay.cpp, desktop_main.c, macos_*) are excluded here.
+# Video is native drako3d (textured quad into a swapchain on the default
+# NWindow; GLSL in runner/ compiles to romfs blobs at build time via uam2).
+# Audio/input/events stay on SDL (2 or 3); input is raw SDL_Joystick
+# (see runner/switch_gamepad.c for the Switch button map). Desktop-only
+# units (desktop_present_sdl.c, desktop_overlay.cpp, desktop_main.c,
+# macos_*) are excluded here.
 
 .SUFFIXES:
 
@@ -37,6 +45,30 @@ APP_VERSION	:=	0.0.5
 # SD layout: sdmc:/switch/<SWITCH_APP_DIR>/rom.smc (+config, saves).
 SWITCH_APP_DIR	?=	dkc3
 
+# Incremental rebuilds sometimes invoke the build dir directly
+# (make -C build-switch ...). TOPDIR then points at the build dir itself;
+# step back up to the repo so every flow shares one layout.
+ifeq ($(notdir $(TOPDIR)),$(BUILD))
+TOPDIR := $(patsubst %/,%,$(dir $(TOPDIR)))
+endif
+
+# SDL backend for the Switch host: 2 (default, static switch portlibs SDL)
+# or 3 (shared portlibs SDL 3.4.0 from the Switch 2 prefix). 3 appends
+# -DSNESRECOMP_SDL3=1 after the framework's -DSNESRECOMP_SDL3=0 so the
+# later define wins; game-owned SDL call sites carry explicit
+# #if SNESRECOMP_SDL3 branches. Shared SDL3 only loads in a dynamically
+# linked program, so 3 requires DKC3_SWITCH_DYNAMIC=1.
+DKC3_SWITCH_SDL	?=	2
+DKC3_SWITCH_DYNAMIC	?=	0
+
+ifeq ($(DKC3_SWITCH_SDL),3)
+ifeq ($(DKC3_SWITCH_DYNAMIC),1)
+# ok: shared SDL3 in a dynamic program
+else
+$(error "DKC3_SWITCH_SDL=3 needs DKC3_SWITCH_DYNAMIC=1 (SDL3 is shared-only)")
+endif
+endif
+
 SNESRECOMP_ROOT	?=	$(TOPDIR)/snesrecomp
 export SNESRECOMP_ROOT
 include $(SNESRECOMP_ROOT)/runner/switch.mk
@@ -58,8 +90,8 @@ SNESRECOMP_SWITCH_CFILES := $(filter-out \
 # replacements applied to build-tree copies of the pinned runner, which the
 # Switch build compiles instead of the pristine TUs. Regenerates when the
 # hunks, either applier script, or the pinned sources change; the guard
-# script re-applies the Switch tier2_record cut on top (it refuses to run
-# on an already-guarded copy, so hand edits survive no-op rebuilds).
+# script re-applies the Switch tier2 cuts on top (idempotent: already-guarded
+# copies succeed unchanged, so re-runs after hand edits are safe).
 DKC3_PATCHED_DIR := $(TOPDIR)/patched-runtime
 DKC3_PATCHED_NAMES := apu.c audio_trace.c common_cpu_infra.c cpu_state.c \
 	dsp.c dsp_shadow.c interp_bridge.c ppu.c tier2_capture.c
@@ -148,7 +180,11 @@ DATA		:=
 ROMFS		:=
 APP_ICON	:=	$(TOPDIR)/assets/switch/icon.jpg
 
+ifeq ($(DKC3_SWITCH_DYNAMIC),1)
+ARCH	:=	$(SWITCH2_SHARED_ARCH)
+else
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+endif
 
 CFILES		:=	$(GAME_CFILES) $(SNESRECOMP_SWITCH_CFILES)
 
@@ -173,17 +209,32 @@ else
 SDL2_CONFIG		:=	sdl2-config
 endif
 
+ifeq ($(DKC3_SWITCH_SDL),3)
+# The framework pins SNESRECOMP_SDL3=0 for Switch; this later define wins.
+DEFINES		+=	-DSNESRECOMP_SDL3=1
+DKC3_SDL_CFLAGS	:=	`OUNCE_SHARED=1 $(DEVKITPRO)/portlibs/switch2/bin/aarch64-none-elf-pkg-config --cflags sdl3`
+DKC3_SDL_LIBS	:=	`OUNCE_SHARED=1 $(DEVKITPRO)/portlibs/switch2/bin/aarch64-none-elf-pkg-config --libs sdl3`
+else
+DKC3_SDL_CFLAGS	:=	`$(SDL2_CONFIG) --cflags`
+DKC3_SDL_LIBS	:=	`$(SDL2_CONFIG) --libs`
+endif
+
 CFLAGS		:=	-g -Wall -O2 -ffunction-sections -flto=auto \
-			$(ARCH) $(DEFINES) $(INCLUDE) `$(SDL2_CONFIG) --cflags`
+			$(ARCH) $(DEFINES) $(INCLUDE) $(DKC3_SDL_CFLAGS)
 
 CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions
 
 ASFLAGS		:=	-g $(ARCH)
+ifeq ($(DKC3_SWITCH_DYNAMIC),1)
+LDFLAGS		=	-specs=$(SWITCH2_SHARED_SPECS) -g $(ARCH) -flto=auto \
+			-Wl,-Map,$(notdir $*.map)
+else
 LDFLAGS		=	-specs=$(DEVKITPRO)/libounce/switch.specs -g $(ARCH) -flto=auto \
 			-Wl,-Map,$(notdir $*.map)
+endif
 
 # GC sections so the never-called desktop launcher entry point
-# (Dkc2LauncherRun) and its recomp-ui references are dropped from the
+# (Dkc3LauncherRun) and its recomp-ui references are dropped from the
 # link; the Switch build never runs the pre-boot UI.
 LDFLAGS		+=	-Wl,--gc-sections
 # Neutralize SDL2's Switch keyboard pump (no text input in these titles).
@@ -195,7 +246,58 @@ else
 LIBDIRS		:=	$(PORTLIBS) $(LIBNX)
 endif
 
-LIBS		:=	`$(SDL2_CONFIG) --libs` -lm -lnx -lEGL
+# Native GPU path is drako3d (no SDL renderer); SDL stays for audio,
+# input, and events only, so -lEGL is gone. DEBUG=1 takes the debug
+# drako3d with extra validation, like the drako_basic example.
+ifdef DEBUG
+DKC3_DRAKO_LIB	:=	-ldrako3dd
+else
+DKC3_DRAKO_LIB	:=	-ldrako3d
+endif
+LIBS		:=	$(DKC3_SDL_LIBS) -lm -lnx $(DKC3_DRAKO_LIB)
+
+# SDL/dynamic/DEBUG choices change -D flags, ARCH, specs, and SDL link
+# lines without touching any source mtime, so a bare flag flip would
+# otherwise relink stale objects (SDL3-compiled TUs against SDL2 and
+# vice versa). The stamp records the active combo; flag-sensitive TUs
+# depend on it, forcing a rebuild of exactly those files.
+DKC3_SWITCH_CONFIG	:=	SDL=$(DKC3_SWITCH_SDL) DYNAMIC=$(DKC3_SWITCH_DYNAMIC) DEBUG=$(DEBUG)
+DKC3_FLAG_SENSITIVE	:=	sdl_main.o switch_gamepad.o desktop_present_switch.o desktop_launcher.o
+DKC3_CONFIG_STAMP	:=	$(TOPDIR)/$(BUILD)/switch-config.stamp
+
+$(DKC3_CONFIG_STAMP):
+	@[ -d $(@D) ] || mkdir -p $(@D)
+	@echo '$(DKC3_SWITCH_CONFIG)' | cmp -s - $@ 2>/dev/null || echo '$(DKC3_SWITCH_CONFIG)' > $@
+
+$(DKC3_FLAG_SENSITIVE): $(DKC3_CONFIG_STAMP)
+
+# NRO metadata and romfs staging are shared by both flows (outer drive
+# and direct build-dir rebuilds) so every NRO embeds the shaders.
+ifeq ($(wildcard $(APP_ICON)),)
+NROFLAGS += --icon=$(DEVKITPRO)/libounce/default_icon.jpg
+else
+NROFLAGS += --icon=$(APP_ICON)
+endif
+NROFLAGS += --nacp=$(TOPDIR)/$(TARGET).nacp
+
+# drako3d shaders: GLSL source in runner/ compiles to romfs blobs at
+# build time (uam2 ships with the devkit). The NRO embeds the staging dir.
+DKC3_ROMFS_SHADERS	:=	$(TOPDIR)/$(BUILD)/romfs/shaders
+DKC3_DKSH		:=	$(DKC3_ROMFS_SHADERS)/switch_present_vsh.dksh \
+				$(DKC3_ROMFS_SHADERS)/switch_present_fsh.dksh
+
+$(DKC3_ROMFS_SHADERS)/switch_present_vsh.dksh: $(TOPDIR)/runner/switch_present_vsh.glsl
+	@mkdir -p $(@D)
+	$(DEVKITPRO)/tools/bin/uam2 -s vert -o $@ $<
+
+$(DKC3_ROMFS_SHADERS)/switch_present_fsh.dksh: $(TOPDIR)/runner/switch_present_fsh.glsl
+	@mkdir -p $(@D)
+	$(DEVKITPRO)/tools/bin/uam2 -s frag -o $@ $<
+
+ifneq ($(ROMFS),)
+NROFLAGS += --romfsdir=$(TOPDIR)/$(ROMFS)
+endif
+NROFLAGS += --romfsdir=$(TOPDIR)/$(BUILD)/romfs
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -214,22 +316,17 @@ export HFILES_BIN	:=
 export LD	:=	$(CC)
 
 export INCLUDE	:=	$(INCLUDE)
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
-
-ifeq ($(wildcard $(APP_ICON)),)
-export NROFLAGS += --icon=$(DEVKITPRO)/libounce/default_icon.jpg
+# Dynamic builds resolve shared libs (SDL3, OunceVK) from the Switch 2
+# shared prefix before any static archive of the same name.
+ifeq ($(DKC3_SWITCH_DYNAMIC),1)
+export LIBPATHS	:=	$(SWITCH2_SHARED_LIBPATHS) $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 else
-export NROFLAGS += --icon=$(APP_ICON)
-endif
-export NROFLAGS += --nacp=$(TOPDIR)/$(TARGET).nacp
-
-ifneq ($(ROMFS),)
-export NROFLAGS += --romfsdir=$(TOPDIR)/$(ROMFS)
+export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 endif
 
 .PHONY: $(BUILD) clean all
 
-all: $(BUILD)
+all: $(DKC3_DKSH) $(BUILD)
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
@@ -245,7 +342,7 @@ else
 
 DEPENDS	:=	$(OFILES:.o=.d)
 
-all	:	$(OUTPUT).nro
+all	:	$(DKC3_DKSH) $(OUTPUT).nro
 
 $(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
 

@@ -1899,3 +1899,72 @@ difference above is worth a pass of its own. Artifacts (verification and
 benchmark JSON, histograms, arrival outcomes, the step trace of cave run
 300, the diagnostic hunks) are under
 `/Users/briantate/Documents/Codex/diagnostics/dkc3-optimize2-20260910/pass7`.
+
+## 2026-11-25 - Switch SDL3 backend and native drako3d presenter (port)
+
+Ported from DKC2Recomp, where both changes run on device (DKC3 has no
+Switch hardware run yet -- everything below is compile-verified only).
+
+`make DKC3_SWITCH_DYNAMIC=1` links libounce.so plus the shared Switch 2
+portlibs (SDL3, OunceVK EGL) instead of the static archives; `=1` plus
+`DKC3_SWITCH_SDL=3` selects the shared portlibs SDL 3.4.0 (there is no
+sdl3-config binary, so flags come from `aarch64-none-elf-pkg-config sdl3`
+with `OUNCE_SHARED=1`). SDL 3 requires the dynamic link and fails closed
+otherwise. A switch-config stamp forces rebuilds of exactly the four
+flag-sensitive TUs when the combo changes, so no stale SDL2/SDL3 mixing.
+Default `make` is byte-identical to before (static SDL2).
+
+SDL3 game code (`#if SNESRECOMP_SDL3`, after the framework pin's `=0`):
+audio moves to the stream API (`SDL_OpenAudioDevice` +
+`SDL_GetAudioDeviceFormat` + `SDL_CreateAudioStream` bound to the device;
+the 48 kHz device format is accepted and converted, queued bytes stay in
+pushed units), joystick/gamepad enumeration is by instance ID, the key
+event reads `event.key.scancode`, and the haptics worker keeps its
+`SDL_GameController*` handles (old-name aliases) with rumble assumed
+available, since SDL3 dropped the capability query.
+
+The Switch presenter is rewritten on drako3d (same API as deko3d) after
+the SDL "opengl" renderer showed clears but never textured frames:
+`Dkc3SdlPresenterBeginFrame` acquires the swapchain slot and, under the
+Raw filter, hands emulation the pitch-linear texture memory to draw into
+(zero copy; the 1536-byte layout pitch is fixed up front);
+`Present` pushes real image/sampler descriptors (`dkImageDescriptor-`
+`/dkSamplerDescriptorInitialize` + `dkCmdBufPushData` -- binding raw
+view structs faults the channel), binds texture handle (0,0) and a static
+fullscreen-triangle VBO, and draws. `dkQueueWaitIdle` per frame keeps
+command-buffer/texture ping-pong reuse airtight. GLSL shaders build with
+uam2 into romfs at build time. Backend reports `drako3d`; the overlay
+stub, launcher, and desktop GL/SDL presenters are untouched.
+
+Verification so far: `switch_gamepad.c`, `desktop_present_switch.c`,
+`sdl_main.c`, `desktop_launcher.c` pass `aarch64-none-elf-gcc
+-fsyntax-only` in both SDL modes; both shaders assemble with uam2; the
+Makefile parses in all flag combos with the SDL3-without-dynamic guard
+tripping as intended. Still unverified: any Switch hardware run (audio,
+gamepad mapping, resize, screenshot readback, actual pixels).
+
+## 2026-11-25 - DKC2 widescreen-merge fallout ported (parent-side only)
+
+DKC2's `upstream/dkc2-widescreen-presentation-v0.0.4` merge exposed two
+Switch-build breaks; both were checked here, one applied:
+
+1. `scripts/apply_switch_runtime_guards.py` failed closed on an
+   already-guarded `patched-runtime/interp_bridge.c` (`tier2_verbose
+   anchor not unique`, exit 1). Reproduced against a copy of this
+   repo's own guarded output with the pre-fix script, then ported
+   DKC2's idempotent fix: an already-present guard now succeeds with a
+   "leaving as-is" note instead of refusing, while genuinely ambiguous
+   anchors still fail. Verified both paths: fresh apply during
+   `make build-switch` and skip on the pre-guarded copy. The `Makefile`
+   comment describing the old refuse behavior now documents
+   idempotency.
+2. DKC2 had to link `sdd1.c` again (its merged `cart.c` requires it).
+   Checked and NOT applied here: this repo's `cart.o` carries zero
+   `sdd1_*` undefined symbols, so the `filter-out` of `sdd1.c` stays
+   correct -- DKC3's `cart.c` has no S-DD1 path.
+
+No submodule change (rule 8): the pinned branch tip already provides
+the six widescreen APIs the game calls. `make build-switch -j8`
+re-ran the full pipeline (runtime-patch regen, guard step, link) with
+exit 0 and `built ... dkc3.nro`. Still unverified: any Switch
+hardware run.
