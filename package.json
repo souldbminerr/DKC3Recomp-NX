@@ -12,6 +12,7 @@
         "sdmc:/switch/dkc3/"
     ],
     "dependencies": { 
-        "sdl3": "3.4.x.x" 
+        "sdl3": "3.4.x.x",
+        "drako3d": "x.x.x"
     }
 }
