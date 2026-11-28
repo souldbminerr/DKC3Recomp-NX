@@ -1968,3 +1968,21 @@ the six widescreen APIs the game calls. `make build-switch -j8`
 re-ran the full pipeline (runtime-patch regen, guard step, link) with
 exit 0 and `built ... dkc3.nro`. Still unverified: any Switch
 hardware run.
+
+## 2026-11-27 - real dynamic linking (Switch)
+
+Same drill as DKC2, same outcome. DKC3's `switch-config.stamp` had the
+identical frozen-stamp defect (no prerequisites, never refreshed), so
+flag flips only relinked stale objects; fixed with the same `FORCE`
+prerequisite. A fresh `DYNAMIC=1 SDL=3` build then linked clean
+(zero undefined references -- the SDL3 branches plus
+`SDL_ENABLE_OLD_NAMES` already covered every renamed API) and the ELF
+carries exactly `libSDL3.so.0`, `libounce.so.1`,
+`libouncevk-gl.so.1`, `libstdc++.so.6`, `libdrako3d.so.1` as
+`DT_NEEDED`, all preserved into the `.nro` (elf 121 MB -> 90 MB).
+Unlike DKC2, no `sdd1.c` change was needed here: this repo's `cart.o`
+has no `sdd1_*` undefined symbols, so the `filter-out` stays. Tree
+left on the default static config (`make` clean, `DT_NEEDED` empty).
+On-device retest note (from DKC2): the loader also searches
+`sdmc:/kaihen/lib`, so a "libs removed" test must clear copies there
+too otherwise a global fallback masks a missing adjacent `.so`.
